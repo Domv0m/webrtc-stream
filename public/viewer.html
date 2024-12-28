@@ -39,7 +39,7 @@
         // Обработка ICE кандидатов
         socket.on('ice-candidate', async (candidate) => {
             if (peerConnection) {
-                await peerConnection.addIceCandidate(candidate);
+                await peerConnection.addIceCandidate(candidate)
             }
         });
     </script>
