@@ -2,9 +2,25 @@
 <html>
 <head>
     <title>WebRTC Viewer</title>
+    <style>
+        body { 
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            height: 100vh; 
+            margin: 0; 
+            background-color: #f0f0f0; 
+        }
+        #remoteVideo {
+            max-width: 90%;
+            max-height: 80vh;
+            background-color: black;
+        }
+    </style>
 </head>
 <body>
     <video id="remoteVideo" autoplay playsinline></video>
+
     <script src="/socket.io/socket.io.js"></script>
     <script>
         const socket = io();
@@ -12,35 +28,70 @@
         
         const configuration = {
             iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' }
+                { urls: 'stun:stun.l.google.com:19302' },
+                { 
+                    urls: 'turn:openrelay.metered.ca:80',
+                    username: 'openrelayproject',
+                    credential: 'openrelayproject'
+                }
             ]
         };
 
-        // Регистрация как зрителя
         socket.emit('register-viewer');
 
-        let peerConnection;
+        let peerConnection = null;
 
-        // Получение offer от стримера
-        socket.on('streamer-offer', async (offer) => {
+        function createPeerConnection() {
             peerConnection = new RTCPeerConnection(configuration);
 
             peerConnection.ontrack = (event) => {
+                console.log('Track received');
                 remoteVideo.srcObject = event.streams[0];
             };
 
-            await peerConnection.setRemoteDescription(offer);
-            const answer = await peerConnection.createAnswer();
-            await peerConnection.setLocalDescription(answer);
-            
-            socket.emit('viewer-answer', answer);
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    socket.emit('ice-candidate', event.candidate);
+                }
+            };
+
+            peerConnection.onconnectionstatechange = (event) => {
+                console.log('Connection state:', peerConnection.connectionState);
+            };
+        }
+
+        socket.on('streamer-offer', async (offer) => {
+            console.log('Received offer');
+            createPeerConnection();
+
+            try {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+                
+                socket.emit('viewer-answer', answer);
+            } catch (error) {
+                console.error('Error handling offer:', error);
+            }
         });
 
-        // Обработка ICE кандидатов
         socket.on('ice-candidate', async (candidate) => {
-            if (peerConnection) {
-                await peerConnection.addIceCandidate(candidate)
+            try {
+                if (peerConnection) {
+                    await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                }
+            } catch (error) {
+                console.error('Error adding ICE candidate:', error);
             }
+        });
+
+        // Логирование для отладки
+        socket.on('connect', () => {
+            console.log('Socket connected');
+        });
+
+        socket.on('disconnect', () => {
+            console.log('Socket disconnected');
         });
     </script>
 </body>
