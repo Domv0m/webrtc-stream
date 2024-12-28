@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebRTC Streamer</title>
+</head>
+<body>
+    <video id="localVideo" autoplay playsinline muted></video>
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        const localVideo = document.getElementById('localVideo');
+        
+        const configuration = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' }
+            ]
+        };
+
+        let peerConnections = [];
+
+        // Регистрация как стримера
+        socket.emit('register-streamer');
+
+        // Получение локального видео
+        async function startStream() {
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                video: true, 
+                audio: true 
+            });
+            localVideo.srcObject = stream;
+
+            // Создание подключения для каждого зрителя
+            socket.on('viewer-answer', async (answer) => {
+                const peerConnection = new RTCPeerConnection(configuration);
+                stream.getTracks().forEach(track => {
+                    peerConnection.addTrack(track, stream);
+                });
+                await peerConnection.setRemoteDescription(answer);
+                peerConnections.push(peerConnection);
+            });
+
+            // Создание offer для зрителей
+            const peerConnection = new RTCPeerConnection(configuration);
+            stream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, stream);
+            });
+
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            socket.emit('streamer-offer', offer);
+        }
+
+        startStream();
+    </script>
+</body>
+</html>
