@@ -1,12 +1,46 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>WebRTC Stream</title>
+    <meta charset="UTF-8">
+    <title>WebRTC Stream Platform</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #f0f0f0;
+            margin: 0;
+        }
+        .container {
+            text-align: center;
+            background-color: white;
+            padding: 40px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .btn {
+            display: block;
+            width: 200px;
+            margin: 20px auto;
+            padding: 10px;
+            background-color: #4CAF50;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+        }
+        .btn:hover {
+            background-color: #45a049;
+        }
+    </style>
 </head>
 <body>
-    <video id="localVideo" autoplay playsinline></video>
-    <video id="remoteVideo" autoplay playsinline></video>
-    <script src="/socket.io/socket.io.js"></script>
-    <script src="/client.js"></script>
+    <div class="container">
+        <h1>WebRTC Stream Platform</h1>
+        
+        <a href="/streamer.html" class="btn">Start Streaming</a>
+        <a href="/viewer.html" class="btn">Watch Stream</a>
+    </div>
 </body>
 </html>
