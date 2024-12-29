@@ -1,53 +1,41 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Screen Streamer</title>
+    <title>Screen Viewer</title>
     <style>
-        body {
-            font-family: 'Arial', sans-serif;
-            background-color: #1a1a2e;
-            color: white;
+        body, html {
             margin: 0;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            height: 100vh;
-        }
-        .stream-container {
-            display: flex;
-            gap: 15px;
-            flex-grow: 1;
-        }
-        #localVideo, #previewCanvas {
-            flex: 1;
+            padding: 0;
+            height: 100%;
             background-color: black;
-            border-radius: 10px;
-            max-height: 70vh;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
         }
-        .controls {
-            display: flex;
-            gap: 10px;
-            margin-top: 15px;
+        #remoteVideo {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        #status {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            background: rgba(0,0,0,0.5);
+            padding: 5px 10px;
+            z-index: 1000;
         }
     </style>
 </head>
 <body>
-    <div class="stream-container">
-        <video id="localVideo" autoplay playsinline muted></video>
-        <canvas id="previewCanvas"></canvas>
-    </div>
-
-    <div id="status">Status: Idle</div>
+    <video id="remoteVideo" autoplay playsinline></video>
+    <div id="status">Connecting...</div>
 
     <script src="/socket.io/socket.io.js"></script>
     <script>
         const socket = io();
-        const localVideo = document.getElementById('localVideo');
-        const previewCanvas = document.getElementById('previewCanvas');
+        const remoteVideo = document.getElementById('remoteVideo');
         const statusEl = document.getElementById('status');
-
-        let screenStream = null;
-        let peerConnection = null;
 
         const servers = {
             iceServers: [
@@ -60,91 +48,45 @@
             ]
         };
 
-        async function startCapture() {
-            try {
-                screenStream = await navigator.mediaDevices.getDisplayMedia({
-                    video: { 
-                        displaySurface: 'monitor',
-                        cursor: 'always',
-                        width: { ideal: 1920 },
-                        height: { ideal: 1080 }
-                    }
+        let peerConnection = null;
+
+        function createPeerConnection() {
+            peerConnection = new RTCPeerConnection(servers);
+
+            peerConnection.ontrack = (event) => {
+                statusEl.textContent = 'Stream received';
+                remoteVideo.srcObject = event.streams[0];
+                remoteVideo.play().catch(err => {
+                    statusEl.textContent = `Play error: ${err.message}`;
                 });
+            };
 
-                localVideo.srcObject = screenStream;
-                statusEl.textContent = 'Status: Screen Captured';
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    socket.emit('ice-candidate', event.candidate);
+                }
+            };
 
-                const track = screenStream.getVideoTracks()[0];
-                
-                // Настройка canvas для предпросмотра
-                const imageCapture = new ImageCapture(track);
-                previewCanvas.width = 400;
-                previewCanvas.height = 300;
-                const ctx = previewCanvas.getContext('2d');
-
-                // Создание WebRTC соединения
-                peerConnection = new RTCPeerConnection(servers);
-
-                // Добавление трека в peer connection
-                screenStream.getTracks().forEach(track => {
-                    peerConnection.addTrack(track, screenStream);
-                });
-
-                // Создание оффера
-                const offer = await peerConnection.createOffer({
-                    offerToReceiveAudio: false,
-                    offerToReceiveVideo: true
-                });
-
-                await peerConnection.setLocalDescription(offer);
-
-                // Отправка оффера
-                socket.emit('stream-offer', offer);
-                statusEl.textContent = 'Status: Offer Sent';
-
-                // Обработка ICE кандидатов
-                peerConnection.onicecandidate = (event) => {
-                    if (event.candidate) {
-                        socket.emit('ice-candidate', event.candidate);
-                    }
-                };
-
-                // Логирование состояний
-                peerConnection.onconnectionstatechange = () => {
-                    statusEl.textContent = `Status: ${peerConnection.connectionState}`;
-                };
-
-            } catch (error) {
-                statusEl.textContent = `Error: ${error.message}`;
-                console.error('Capture error:', error);
-            }
+            peerConnection.onconnectionstatechange = () => {
+                statusEl.textContent = `Connection: ${peerConnection.connectionState}`;
+            };
         }
 
-        // Обработка ответа от зрителя
-        socket.on('viewer-answer', async (answer) => {
-            try {
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
-                statusEl.textContent = 'Status: Connected to Viewer';
-            } catch (error) {
-                statusEl.textContent = `Error: ${error.message}`;
-                console.error('Set remote description error:', error);
-            }
-        });
-
-        // Начало captures при готовности
         socket.on('connect', () => {
-            statusEl.textContent = 'Status: Socket Connected';
-            startCapture();
+            statusEl.textContent = 'Socket connected';
         });
 
-        // Обработка ICE кандидатов
-        socket.on('ice-candidate', async (candidate) => {
+        socket.on('stream-offer', async (offer) => {
             try {
-                await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-            } catch (error) {
-                console.error('ICE candidate error:', error);
-            }
-        });
-    </script>
-</body>
-</html>
+                statusEl.textContent = 'Received stream offer';
+                
+                if (!peerConnection) {
+                    createPeerConnection();
+                }
+
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+                
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+                
+                socket.emit('viewer-answer', answer);
