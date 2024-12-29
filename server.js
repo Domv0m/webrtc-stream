@@ -1,120 +1,70 @@
-const express = require('express');
-const http = require('http');
 const WebSocket = require('ws');
 const net = require('net');
-const dgram = require('dgram');
 
-const app = express();
-const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
-
-// Динамический порт
-const PORT = process.env.PORT || 10000;
-const MINECRAFT_PORT = 19132;
-
-// UDP сервер для Minecraft
-const minecraftUdpServer = dgram.createSocket('udp4');
-
-// Логирование с метками времени
-function log(message, type = 'info') {
-    const timestamp = new Date().toISOString();
-    console.log(`[${timestamp}] [${type.toUpperCase()}] ${message}`);
-}
-
-// Базовый роут
-app.get('/', (req, res) => {
-    res.json({
-        status: 'online',
-        service: 'Minecraft Proxy',
-        ports: {
-            http: PORT,
-            minecraft: MINECRAFT_PORT
-        }
-    });
-});
-
-// Настройка UDP сервера
-minecraftUdpServer.on('listening', () => {
-    const address = minecraftUdpServer.address();
-    log(`UDP сервер прослушивает ${address.address}:${address.port}`);
-});
-
-minecraftUdpServer.on('message', (msg, rinfo) => {
-    log(`Получено UDP сообщение от ${rinfo.address}:${rinfo.port}`);
-    log(`Размер сообщения: ${msg.length} байт`);
-    
-    // Базовая обработка пакетов Minecraft
-    try {
-        // Здесь можно добавить декодирование пакетов Minecraft
-        const packetType = msg[0]; // Первый байт часто указывает тип пакета
-        log(`Тип пакета: 0x${packetType.toString(16)}`);
-    } catch (error) {
-        log(`Ошибка обработки пакета: ${error}`, 'error');
+class ProxyServer {
+    constructor(port = 3000) {
+        this.port = port;
+        this.clients = new Map();
     }
-});
 
-minecraftUdpServer.on('error', (err) => {
-    log(`Ошибка UDP сервера: ${err}`, 'error');
-});
+    start() {
+        const wss = new WebSocket.Server({ port: this.port });
 
-// WebSocket для дополнительной диагностики
-wss.on('connection', (ws, req) => {
-    const clientIp = req.socket.remoteAddress;
-    log(`Новое WebSocket подключение от ${clientIp}`);
+        wss.on('connection', (ws) => {
+            const clientId = this.generateClientId();
+            
+            console.log(`Новый клиент: ${clientId}`);
 
-    ws.on('message', (message) => {
+            // Регистрация клиента
+            this.clients.set(clientId, ws);
+
+            ws.on('message', (message) => {
+                this.handleMessage(clientId, message);
+            });
+
+            ws.on('close', () => {
+                this.clients.delete(clientId);
+                console.log(`Клиент отключен: ${clientId}`);
+            });
+        });
+
+        console.log(`Прокси-сервер запущен на порту ${this.port}`);
+    }
+
+    generateClientId() {
+        return Math.random().toString(36).substr(2, 9);
+    }
+
+    handleMessage(clientId, message) {
         try {
             const data = JSON.parse(message);
-            log(`Получены данные: ${JSON.stringify(data)}`);
-
-            // Диагностический ответ
-            ws.send(JSON.stringify({
-                status: 'connected',
-                message: 'Готов к обработке Minecraft-соединения',
-                clientIp: clientIp
-            }));
+            
+            switch(data.type) {
+                case 'connect':
+                    this.handleConnect(clientId, data);
+                    break;
+                case 'data':
+                    this.forwardData(clientId, data);
+                    break;
+            }
         } catch (error) {
-            log(`Ошибка обработки сообщения: ${error}`, 'error');
+            console.error('Ошибка обработки сообщения:', error);
         }
-    });
-});
+    }
 
-// Функция запуска серверов
-function startServers() {
-    return new Promise((resolve, reject) => {
-        try {
-            // HTTP/WebSocket сервер
-            server.listen(PORT, '0.0.0.0', () => {
-                log(`HTTP/WebSocket сервер запущен на порту ${PORT}`);
-            });
+    handleConnect(clientId, data) {
+        console.log(`Запрос подключения от ${clientId}`);
+        // Логика обработки нового подключения
+    }
 
-            // UDP сервер для Minecraft
-            minecraftUdpServer.bind(MINECRAFT_PORT, '0.0.0.0', () => {
-                log(`UDP сервер Minecraft запущен на порту ${MINECRAFT_PORT}`);
-                resolve();
-            });
-        } catch (error) {
-            log(`Критическая ошибка запуска: ${error}`, 'error');
-            reject(error);
+    forwardData(clientId, data) {
+        // Пересылка данных между клиентами
+        const targetClient = this.clients.get(data.target);
+        if (targetClient) {
+            targetClient.send(JSON.stringify(data));
         }
-    });
-}
-
-// Основная функция
-async function main() {
-    try {
-        await startServers();
-        log('Все сервера успешно запущены');
-    } catch (error) {
-        log(`Ошибка инициализации: ${error}`, 'error');
-        process.exit(1);
     }
 }
 
-// Запуск
-main();
-
-// Обработка неперехваченных исключений
-process.on('uncaughtException', (error) => {
-    log(`Непредвиденная ошибка: ${error}`, 'critical');
-});
+const server = new ProxyServer();
+server.start();
