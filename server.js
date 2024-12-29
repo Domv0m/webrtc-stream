@@ -8,53 +8,42 @@ const io = socketIo(server);
 
 app.use(express.static('public'));
 
-let streamerSocket = null;
-const viewerSockets = new Set();
+let streamer = null;
+const viewers = new Set();
 
 io.on('connection', (socket) => {
     console.log('New connection:', socket.id);
 
-    // Регистрация стримера
-    socket.on('register-streamer', () => {
-        streamerSocket = socket;
+    socket.on('streamer-ready', () => {
+        streamer = socket;
         console.log('Streamer connected');
     });
 
-    // Регистрация зрителя
-    socket.on('register-viewer', () => {
-        viewerSockets.add(socket);
-        console.log('Viewer connected');
+    socket.on('viewer-request', () => {
+        viewers.add(socket);
+        if (streamer) {
+            streamer.emit('viewer-request');
+        }
     });
 
-    // Передача offer от стримера
     socket.on('streamer-offer', (offer) => {
-        viewerSockets.forEach(viewer => {
+        viewers.forEach(viewer => {
             viewer.emit('streamer-offer', offer);
         });
     });
 
-    // Передача answer от зрителей
     socket.on('viewer-answer', (answer) => {
-        if (streamerSocket) {
-            streamerSocket.emit('viewer-answer', answer);
+        if (streamer) {
+            streamer.emit('viewer-answer', answer);
         }
     });
 
-    // ICE кандидаты
     socket.on('ice-candidate', (candidate) => {
         socket.broadcast.emit('ice-candidate', candidate);
     });
 
     socket.on('disconnect', () => {
-        if (socket === streamerSocket) {
-            streamerSocket = null;
+        viewers.delete(socket);
+        if (socket === streamer) {
+            streamer = null;
             console.log('Streamer disconnected');
-        }
-        viewerSockets.delete(socket);
-    });
-});
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-});
