@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>WebRTC Screen Sharing Streamer</title>
+    <title>WebRTC Streamer</title>
     <style>
         body { 
             display: flex; 
@@ -10,13 +10,23 @@
             padding: 20px; 
             background-color: #f0f0f0; 
         }
-        video, #screenShare { 
-            max-width: 80%; 
+        .video-container {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+        }
+        video { 
+            width: 400px;
+            height: 300px;
             background-color: black; 
             margin-bottom: 20px; 
         }
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
         button {
-            margin: 10px;
             padding: 10px;
             background-color: #4CAF50;
             color: white;
@@ -24,18 +34,25 @@
             border-radius: 5px;
             cursor: pointer;
         }
+        #cameraSelect {
+            padding: 10px;
+            margin-right: 10px;
+        }
     </style>
 </head>
 <body>
     <div id="status">Initializing...</div>
     
-    <div>
+    <div class="controls">
+        <select id="cameraSelect"></select>
         <button id="startCamera">Start Camera</button>
         <button id="shareScreen">Share Screen</button>
     </div>
 
-    <video id="localVideo" autoplay playsinline muted></video>
-    <video id="screenShare" autoplay playsinline muted></video>
+    <div class="video-container">
+        <video id="localVideo" autoplay playsinline muted></video>
+        <video id="screenShare" autoplay playsinline muted></video>
+    </div>
 
     <script src="/socket.io/socket.io.js"></script>
     <script>
@@ -45,6 +62,7 @@
         const statusEl = document.getElementById('status');
         const startCameraBtn = document.getElementById('startCamera');
         const shareScreenBtn = document.getElementById('shareScreen');
+        const cameraSelect = document.getElementById('cameraSelect');
 
         const servers = {
             iceServers: [
@@ -61,21 +79,66 @@
         let screenStream = null;
         let peerConnections = [];
 
+        // Получение списка камер
+        async function getCameras() {
+            try {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const videoDevices = devices.filter(device => device.kind === 'videoinput');
+                
+                cameraSelect.innerHTML = '';
+                videoDevices.forEach((device, index) => {
+                    const option = document.createElement('option');
+                    option.value = device.deviceId;
+                    option.text = device.label || `Camera ${index + 1}`;
+                    cameraSelect.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Error getting cameras:', error);
+            }
+        }
+
+        // Старт камеры с выбранным устройством
         async function startCamera() {
             try {
-                localStream = await navigator.mediaDevices.getUserMedia({ 
-                    video: true, 
+                const constraints = {
+                    video: { 
+                        deviceId: cameraSelect.value ? 
+                            { exact: cameraSelect.value } : undefined 
+                    },
                     audio: true 
-                });
+                };
+
+                localStream = await navigator.mediaDevices.getUserMedia(constraints);
                 localVideo.srcObject = localStream;
                 statusEl.textContent = 'Camera started';
-                socket.emit('streamer-ready');
+                
+                // Создание WebRTC соединения для камеры
+                const peerConnection = new RTCPeerConnection(servers);
+                
+                localStream.getTracks().forEach(track => {
+                    peerConnection.addTrack(track, localStream);
+                });
+
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+                
+                socket.emit('streamer-offer', offer);
+
+                peerConnection.onicecandidate = (event) => {
+                    if (event.candidate) {
+                        socket.emit('ice-candidate', event.candidate);
+                    }
+                };
+
+                peerConnections.push(peerConnection);
+
             } catch (error) {
                 statusEl.textContent = 'Error accessing camera';
                 console.error(error);
             }
         }
 
+        // Демонстрация экрана
         async function shareScreen() {
             try {
                 screenStream = await navigator.mediaDevices.getDisplayMedia({ 
@@ -85,7 +148,6 @@
                 screenShareVideo.srcObject = screenStream;
                 statusEl.textContent = 'Screen sharing started';
                 
-                // Создаем новое WebRTC соединение для экрана
                 const peerConnection = new RTCPeerConnection(servers);
                 
                 screenStream.getTracks().forEach(track => {
@@ -111,18 +173,25 @@
             }
         }
 
-        // Обработка ответа от зрителей
+        // Обработка ответов
+        socket.on('viewer-answer', async (answer) => {
+            const peerConnection = peerConnections[0];
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+            statusEl.textContent = 'Camera stream connection established';
+        });
+
         socket.on('viewer-screen-answer', async (answer) => {
-            const peerConnection = peerConnections[peerConnections.length - 1];
+            const peerConnection = peerConnections[1];
             await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
             statusEl.textContent = 'Screen sharing connection established';
         });
 
+        // Инициализация
         startCameraBtn.addEventListener('click', startCamera);
         shareScreenBtn.addEventListener('click', shareScreen);
 
-        // Автоподключение камеры
-        startCamera();
+        // Получение списка камер при загрузке
+        getCameras();
     </script>
 </body>
 </html>
