@@ -1,98 +1,20 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>WebRTC Viewer</title>
-    <style>
-        body { 
-            display: flex; 
-            flex-direction: column; 
-            align-items: center; 
-            padding: 20px; 
-            background-color: #f0f0f0; 
+<script>
+    // ... существующий код ...
+
+    // Новый обработчик для экрана
+    socket.on('screen-offer', async (offer) => {
+        createPeerConnection();
+
+        try {
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            
+            socket.emit('viewer-screen-answer', answer);
+            statusEl.textContent = 'Screen sharing - Sending answer...';
+        } catch (error) {
+            statusEl.textContent = 'Screen sharing - Error processing offer';
+            console.error(error);
         }
-        video { 
-            max-width: 80%; 
-            background-color: black; 
-            margin-bottom: 20px; 
-        }
-        #status {
-            margin-bottom: 10px;
-            font-weight: bold;
-        }
-    </style>
-</head>
-<body>
-    <div id="status">Connecting to stream...</div>
-    <video id="remoteVideo" autoplay playsinline></video>
-
-    <script src="/socket.io/socket.io.js"></script>
-    <script>
-        const socket = io();
-        const remoteVideo = document.getElementById('remoteVideo');
-        const statusEl = document.getElementById('status');
-
-        const servers = {
-            iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' },
-                { 
-                    urls: 'turn:openrelay.metered.ca:80',
-                    username: 'openrelayproject',
-                    credential: 'openrelayproject'
-                }
-            ]
-        };
-
-        let peerConnection = null;
-
-        function createPeerConnection() {
-            peerConnection = new RTCPeerConnection(servers);
-
-            peerConnection.ontrack = (event) => {
-                remoteVideo.srcObject = event.streams[0];
-                statusEl.textContent = 'Stream connected';
-            };
-
-            peerConnection.onicecandidate = (event) => {
-                if (event.candidate) {
-                    socket.emit('ice-candidate', event.candidate);
-                }
-            };
-
-            peerConnection.onconnectionstatechange = () => {
-                statusEl.textContent = `Connection state: ${peerConnection.connectionState}`;
-            };
-        }
-
-        socket.on('connect', () => {
-            socket.emit('viewer-request');
-            statusEl.textContent = 'Requesting stream...';
-        });
-
-        socket.on('streamer-offer', async (offer) => {
-            createPeerConnection();
-
-            try {
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
-                const answer = await peerConnection.createAnswer();
-                await peerConnection.setLocalDescription(answer);
-                
-                socket.emit('viewer-answer', answer);
-                statusEl.textContent = 'Sending answer...';
-            } catch (error) {
-                statusEl.textContent = 'Error processing offer';
-                console.error(error);
-            }
-        });
-
-        socket.on('ice-candidate', async (candidate) => {
-            try {
-                if (peerConnection) {
-                    await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-                }
-            } catch (error) {
-                console.error('Error adding ICE candidate:', error);
-            }
-        });
-    </script>
-</body>
-</html>
+    });
+</script>
