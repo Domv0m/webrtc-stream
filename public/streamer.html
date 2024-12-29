@@ -1,68 +1,67 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>WebRTC Streamer</title>
+    <title>Selective Screen Share</title>
     <style>
-        body { 
-            display: flex; 
-            flex-direction: column; 
-            align-items: center; 
-            padding: 20px; 
-            background-color: #f0f0f0; 
-        }
-        .video-container {
+        body {
+            font-family: Arial, sans-serif;
             display: flex;
-            justify-content: center;
-            gap: 20px;
-        }
-        video { 
-            width: 400px;
-            height: 300px;
-            background-color: black; 
-            margin-bottom: 20px; 
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            background-color: #f0f0f0;
         }
         .controls {
             display: flex;
             gap: 10px;
             margin-bottom: 20px;
         }
-        button {
-            padding: 10px;
-            background-color: #4CAF50;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
+        #previewCanvas {
+            max-width: 500px;
+            border: 2px solid #333;
+            background-color: white;
         }
-        #cameraSelect {
-            padding: 10px;
-            margin-right: 10px;
+        .selection-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            display: none;
+        }
+        #selectionRect {
+            position: absolute;
+            border: 2px solid red;
+            background: rgba(255, 0, 0, 0.1);
         }
     </style>
 </head>
 <body>
-    <div id="status">Initializing...</div>
-    
     <div class="controls">
-        <select id="cameraSelect"></select>
-        <button id="startCamera">Start Camera</button>
-        <button id="shareScreen">Share Screen</button>
+        <button id="selectArea">Select Screen Area</button>
+        <button id="startStream">Start Streaming</button>
     </div>
 
-    <div class="video-container">
-        <video id="localVideo" autoplay playsinline muted></video>
-        <video id="screenShare" autoplay playsinline muted></video>
+    <canvas id="previewCanvas"></canvas>
+
+    <div class="selection-overlay" id="selectionOverlay">
+        <div id="selectionRect"></div>
     </div>
 
     <script src="/socket.io/socket.io.js"></script>
     <script>
         const socket = io();
-        const localVideo = document.getElementById('localVideo');
-        const screenShareVideo = document.getElementById('screenShare');
-        const statusEl = document.getElementById('status');
-        const startCameraBtn = document.getElementById('startCamera');
-        const shareScreenBtn = document.getElementById('shareScreen');
-        const cameraSelect = document.getElementById('cameraSelect');
+        const selectAreaBtn = document.getElementById('selectArea');
+        const startStreamBtn = document.getElementById('startStream');
+        const previewCanvas = document.getElementById('previewCanvas');
+        const selectionOverlay = document.getElementById('selectionOverlay');
+        const selectionRect = document.getElementById('selectionRect');
+
+        let selectedArea = null;
+        let mediaStream = null;
+        let peerConnection = null;
 
         const servers = {
             iceServers: [
@@ -75,123 +74,142 @@
             ]
         };
 
-        let localStream = null;
-        let screenStream = null;
-        let peerConnections = [];
-
-        // Получение списка камер
-        async function getCameras() {
+        // Выбор области экрана
+        selectAreaBtn.addEventListener('click', async () => {
             try {
-                const devices = await navigator.mediaDevices.enumerateDevices();
-                const videoDevices = devices.filter(device => device.kind === 'videoinput');
-                
-                cameraSelect.innerHTML = '';
-                videoDevices.forEach((device, index) => {
-                    const option = document.createElement('option');
-                    option.value = device.deviceId;
-                    option.text = device.label || `Camera ${index + 1}`;
-                    cameraSelect.appendChild(option);
-                });
-            } catch (error) {
-                console.error('Error getting cameras:', error);
-            }
-        }
-
-        // Старт камеры с выбранным устройством
-        async function startCamera() {
-            try {
-                const constraints = {
+                const stream = await navigator.mediaDevices.getDisplayMedia({
                     video: { 
-                        deviceId: cameraSelect.value ? 
-                            { exact: cameraSelect.value } : undefined 
-                    },
-                    audio: true 
-                };
-
-                localStream = await navigator.mediaDevices.getUserMedia(constraints);
-                localVideo.srcObject = localStream;
-                statusEl.textContent = 'Camera started';
-                
-                // Создание WebRTC соединения для камеры
-                const peerConnection = new RTCPeerConnection(servers);
-                
-                localStream.getTracks().forEach(track => {
-                    peerConnection.addTrack(track, localStream);
+                        displaySurface: 'browser',
+                        cursor: 'always'
+                    }
                 });
 
-                const offer = await peerConnection.createOffer();
-                await peerConnection.setLocalDescription(offer);
+                const track = stream.getVideoTracks()[0];
+                const imageCapture = new ImageCapture(track);
+                const bitmap = await imageCapture.grabFrame();
+
+                // Отрисовка превью
+                previewCanvas.width = bitmap.width;
+                previewCanvas.height = bitmap.height;
+                const ctx = previewCanvas.getContext('2d');
+                ctx.drawImage(bitmap, 0, 0);
+
+                // Включаем оверлей для выбора области
+                selectionOverlay.style.display = 'block';
                 
-                socket.emit('streamer-offer', offer);
+                let startX, startY;
+                let isSelecting = false;
 
-                peerConnection.onicecandidate = (event) => {
-                    if (event.candidate) {
-                        socket.emit('ice-candidate', event.candidate);
-                    }
-                };
+                selectionOverlay.addEventListener('mousedown', (e) => {
+                    isSelecting = true;
+                    startX = e.clientX;
+                    startY = e.clientY;
+                    
+                    selectionRect.style.left = `${startX}px`;
+                    selectionRect.style.top = `${startY}px`;
+                    selectionRect.style.width = '0px';
+                    selectionRect.style.height = '0px';
+                });
 
-                peerConnections.push(peerConnection);
+                selectionOverlay.addEventListener('mousemove', (e) => {
+                    if (!isSelecting) return;
+
+                    const width = Math.abs(e.clientX - startX);
+                    const height = Math.abs(e.clientY - startY);
+                    
+                    selectionRect.style.width = `${width}px`;
+                    selectionRect.style.height = `${height}px`;
+                    
+                    selectionRect.style.left = e.clientX > startX 
+                        ? `${startX}px` 
+                        : `${e.clientX}px`;
+                    
+                    selectionRect.style.top = e.clientY > startY 
+                        ? `${startY}px` 
+                        : `${e.clientY}px`;
+                });
+
+                selectionOverlay.addEventListener('mouseup', (e) => {
+                    isSelecting = false;
+                    selectionOverlay.style.display = 'none';
+
+                    // Сохраняем координаты выделенной области
+                    selectedArea = {
+                        x: parseInt(selectionRect.style.left),
+                        y: parseInt(selectionRect.style.top),
+                        width: parseInt(selectionRect.style.width),
+                        height: parseInt(selectionRect.style.height)
+                    };
+
+                    mediaStream = stream;
+                });
 
             } catch (error) {
-                statusEl.textContent = 'Error accessing camera';
-                console.error(error);
+                console.error('Screen selection error:', error);
             }
-        }
-
-        // Демонстрация экрана
-        async function shareScreen() {
-            try {
-                screenStream = await navigator.mediaDevices.getDisplayMedia({ 
-                    video: true,
-                    audio: false 
-                });
-                screenShareVideo.srcObject = screenStream;
-                statusEl.textContent = 'Screen sharing started';
-                
-                const peerConnection = new RTCPeerConnection(servers);
-                
-                screenStream.getTracks().forEach(track => {
-                    peerConnection.addTrack(track, screenStream);
-                });
-
-                const offer = await peerConnection.createOffer();
-                await peerConnection.setLocalDescription(offer);
-                
-                socket.emit('screen-offer', offer);
-
-                peerConnection.onicecandidate = (event) => {
-                    if (event.candidate) {
-                        socket.emit('ice-candidate', event.candidate);
-                    }
-                };
-
-                peerConnections.push(peerConnection);
-
-            } catch (error) {
-                statusEl.textContent = 'Screen sharing error';
-                console.error(error);
-            }
-        }
-
-        // Обработка ответов
-        socket.on('viewer-answer', async (answer) => {
-            const peerConnection = peerConnections[0];
-            await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
-            statusEl.textContent = 'Camera stream connection established';
         });
 
+        // Старт стриминга
+        startStreamBtn.addEventListener('click', async () => {
+            if (!mediaStream) {
+                alert('Сначала выберите область экрана');
+                return;
+            }
+
+            // Создаем canvas для стриминга выбранной области
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            
+            const track = mediaStream.getVideoTracks()[0];
+            const imageCapture = new ImageCapture(track);
+
+            canvas.width = selectedArea.width;
+            canvas.height = selectedArea.height;
+
+            // Периодическое обновление кадра
+            function streamFrame() {
+                imageCapture.grabFrame().then(bitmap => {
+                    ctx.drawImage(
+                        bitmap, 
+                        selectedArea.x, selectedArea.y, 
+                        selectedArea.width, selectedArea.height,
+                        0, 0, 
+                        selectedArea.width, selectedArea.height
+                    );
+                    requestAnimationFrame(streamFrame);
+                });
+            }
+
+            streamFrame();
+
+            // WebRTC стриминг
+            const stream = canvas.captureStream(25);
+            peerConnection = new RTCPeerConnection(servers);
+            
+            stream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, stream);
+            });
+
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            
+            socket.emit('screen-offer', peerConnection.localDescription);
+
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    socket.emit('ice-candidate', event.candidate);
+                }
+            };
+        });
+
+        // Обработка ответа от зрителей
         socket.on('viewer-screen-answer', async (answer) => {
-            const peerConnection = peerConnections[1];
             await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
-            statusEl.textContent = 'Screen sharing connection established';
         });
 
-        // Инициализация
-        startCameraBtn.addEventListener('click', startCamera);
-        shareScreenBtn.addEventListener('click', shareScreen);
-
-        // Получение списка камер при загрузке
-        getCameras();
+        socket.on('ice-candidate', async (candidate) => {
+            await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        });
     </script>
 </body>
 </html>
