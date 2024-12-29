@@ -2,54 +2,103 @@
 <html>
 <head>
     <title>WebRTC Streamer</title>
+    <style>
+        body { 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            padding: 20px; 
+            background-color: #f0f0f0; 
+        }
+        video { 
+            max-width: 80%; 
+            background-color: black; 
+            margin-bottom: 20px; 
+        }
+        #status {
+            margin-bottom: 10px;
+            font-weight: bold;
+        }
+    </style>
 </head>
 <body>
+    <div id="status">Initializing...</div>
     <video id="localVideo" autoplay playsinline muted></video>
+
     <script src="/socket.io/socket.io.js"></script>
     <script>
         const socket = io();
         const localVideo = document.getElementById('localVideo');
-        
-        const configuration = {
+        const statusEl = document.getElementById('status');
+
+        const servers = {
             iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' }
+                { urls: 'stun:stun.l.google.com:19302' },
+                { 
+                    urls: 'turn:openrelay.metered.ca:80',
+                    username: 'openrelayproject',
+                    credential: 'openrelayproject'
+                }
             ]
         };
 
+        let localStream = null;
         let peerConnections = [];
 
-        // Регистрация как стримера
-        socket.emit('register-streamer');
-
-        // Получение локального видео
         async function startStream() {
-            const stream = await navigator.mediaDevices.getUserMedia({ 
-                video: true, 
-                audio: true 
-            });
-            localVideo.srcObject = stream;
-
-            // Создание подключения для каждого зрителя
-            socket.on('viewer-answer', async (answer) => {
-                const peerConnection = new RTCPeerConnection(configuration);
-                stream.getTracks().forEach(track => {
-                    peerConnection.addTrack(track, stream);
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ 
+                    video: true, 
+                    audio: true 
                 });
-                await peerConnection.setRemoteDescription(answer);
-                peerConnections.push(peerConnection);
-            });
+                localVideo.srcObject = localStream;
+                statusEl.textContent = 'Stream started. Waiting for viewers...';
+                
+                socket.emit('streamer-ready');
+            } catch (error) {
+                statusEl.textContent = 'Error accessing media devices';
+                console.error(error);
+            }
+        }
 
-            // Создание offer для зрителей
-            const peerConnection = new RTCPeerConnection(configuration);
-            stream.getTracks().forEach(track => {
-                peerConnection.addTrack(track, stream);
+        socket.on('viewer-request', async () => {
+            if (!localStream) {
+                await startStream();
+            }
+
+            const peerConnection = new RTCPeerConnection(servers);
+            
+            localStream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, localStream);
             });
 
             const offer = await peerConnection.createOffer();
             await peerConnection.setLocalDescription(offer);
+            
             socket.emit('streamer-offer', offer);
-        }
+            statusEl.textContent = 'Offer sent to viewer';
 
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    socket.emit('ice-candidate', event.candidate);
+                }
+            };
+
+            peerConnections.push(peerConnection);
+        });
+
+        socket.on('viewer-answer', async (answer) => {
+            const peerConnection = peerConnections[peerConnections.length - 1];
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+            statusEl.textContent = 'Connection established';
+        });
+
+        socket.on('ice-candidate', async (candidate) => {
+            const peerConnection = peerConnections[peerConnections.length - 1];
+            await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        });
+
+        // Автозапуск
         startStream();
     </script>
 </body>
