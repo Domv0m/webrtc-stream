@@ -23,4 +23,29 @@
     <script src="/socket.io/socket.io.js"></script>
     <script>
         const socket = io();
-        const remoteVideo = document.
+        const remoteVideo = document.getElementById('remoteVideo');
+
+        const servers = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { 
+                    urls: 'turn:openrelay.metered.ca:80',
+                    username: 'openrelayproject',
+                    credential: 'openrelayproject'
+                }
+            ]
+        };
+
+        let peerConnection = null;
+
+        function createPeerConnection() {
+            peerConnection = new RTCPeerConnection(servers);
+
+            peerConnection.ontrack = (event) => {
+                console.log('Track received');
+                remoteVideo.srcObject = event.streams[0];
+            };
+
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    socket.emit('ice-candidate',
