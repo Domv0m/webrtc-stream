@@ -5,28 +5,33 @@
     <style>
         body { 
             display: flex; 
-            justify-content: center; 
+            flex-direction: column; 
             align-items: center; 
-            height: 100vh; 
-            margin: 0; 
+            padding: 20px; 
             background-color: #f0f0f0; 
         }
-        #remoteVideo {
-            max-width: 90%;
-            max-height: 80vh;
-            background-color: black;
+        video { 
+            max-width: 80%; 
+            background-color: black; 
+            margin-bottom: 20px; 
+        }
+        #status {
+            margin-bottom: 10px;
+            font-weight: bold;
         }
     </style>
 </head>
 <body>
+    <div id="status">Connecting to stream...</div>
     <video id="remoteVideo" autoplay playsinline></video>
 
     <script src="/socket.io/socket.io.js"></script>
     <script>
         const socket = io();
         const remoteVideo = document.getElementById('remoteVideo');
-        
-        const configuration = {
+        const statusEl = document.getElementById('status');
+
+        const servers = {
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
                 { 
@@ -37,16 +42,14 @@
             ]
         };
 
-        socket.emit('register-viewer');
-
         let peerConnection = null;
 
         function createPeerConnection() {
-            peerConnection = new RTCPeerConnection(configuration);
+            peerConnection = new RTCPeerConnection(servers);
 
             peerConnection.ontrack = (event) => {
-                console.log('Track received');
                 remoteVideo.srcObject = event.streams[0];
+                statusEl.textContent = 'Stream connected';
             };
 
             peerConnection.onicecandidate = (event) => {
@@ -55,13 +58,17 @@
                 }
             };
 
-            peerConnection.onconnectionstatechange = (event) => {
-                console.log('Connection state:', peerConnection.connectionState);
+            peerConnection.onconnectionstatechange = () => {
+                statusEl.textContent = `Connection state: ${peerConnection.connectionState}`;
             };
         }
 
+        socket.on('connect', () => {
+            socket.emit('viewer-request');
+            statusEl.textContent = 'Requesting stream...';
+        });
+
         socket.on('streamer-offer', async (offer) => {
-            console.log('Received offer');
             createPeerConnection();
 
             try {
@@ -70,8 +77,10 @@
                 await peerConnection.setLocalDescription(answer);
                 
                 socket.emit('viewer-answer', answer);
+                statusEl.textContent = 'Sending answer...';
             } catch (error) {
-                console.error('Error handling offer:', error);
+                statusEl.textContent = 'Error processing offer';
+                console.error(error);
             }
         });
 
@@ -83,15 +92,6 @@
             } catch (error) {
                 console.error('Error adding ICE candidate:', error);
             }
-        });
-
-        // Логирование для отладки
-        socket.on('connect', () => {
-            console.log('Socket connected');
-        });
-
-        socket.on('disconnect', () => {
-            console.log('Socket disconnected');
         });
     </script>
 </body>
