@@ -1,111 +1,136 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Screen Crop Streamer</title>
+    <title>Screen Streamer</title>
     <style>
         body {
+            font-family: 'Arial', sans-serif;
+            background-color: #1a1a2e;
+            color: white;
+            margin: 0;
+            padding: 20px;
             display: flex;
             flex-direction: column;
-            align-items: center;
-            font-family: Arial;
-            background-color: #f4f4f4;
+            height: 100vh;
         }
-        #cropControls {
+        .stream-container {
+            flex-grow: 1;
+            position: relative;
+        }
+        #localVideo {
+            width: 100%;
+            height: 100%;
+            background-color: black;
+            border-radius: 10px;
+        }
+        .controls {
             display: flex;
             gap: 10px;
-            margin: 10px;
+            margin-top: 15px;
         }
-        #cropControls input {
-            width: 70px;
+        .btn {
+            padding: 10px 15px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: opacity 0.3s;
         }
-        #previewCanvas {
-            border: 2px solid blue;
-            max-width: 500px;
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        #streamControls {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        #streamControls input {
+            width: 100%;
+            padding: 8px;
+            background-color: #2c2c3e;
+            border: 1px solid #444;
+            color: white;
+            border-radius: 5px;
         }
     </style>
 </head>
 <body>
-    <div id="cropControls">
-        <label>X: <input type="number" id="xInput" value="0"></label>
-        <label>Y: <input type="number" id="yInput" value="0"></label>
-        <label>Width: <input type="number" id="widthInput" value="500"></label>
-        <label>Height: <input type="number" id="heightInput" value="500"></label>
-        <button id="startStream">Start Stream</button>
+    <div id="streamControls">
+        <input type="number" id="xCoord" placeholder="X" value="0">
+        <input type="number" id="yCoord" placeholder="Y" value="0">
+        <input type="number" id="width" placeholder="Width" value="800">
+        <input type="number" id="height" placeholder="Height" value="600">
     </div>
 
-    <canvas id="previewCanvas"></canvas>
+    <div class="stream-container">
+        <video id="localVideo" autoplay playsinline muted></video>
+    </div>
+
+    <div class="controls">
+        <button id="startStream" class="btn btn-primary">Start Stream</button>
+        <button id="stopStream" class="btn btn-danger" disabled>Stop Stream</button>
+    </div>
 
     <script src="/socket.io/socket.io.js"></script>
     <script>
         const socket = io();
-        const xInput = document.getElementById('xInput');
-        const yInput = document.getElementById('yInput');
-        const widthInput = document.getElementById('widthInput');
-        const heightInput = document.getElementById('heightInput');
+        const localVideo = document.getElementById('localVideo');
         const startStreamBtn = document.getElementById('startStream');
-        const previewCanvas = document.getElementById('previewCanvas');
+        const stopStreamBtn = document.getElementById('stopStream');
+        const xCoord = document.getElementById('xCoord');
+        const yCoord = document.getElementById('yCoord');
+        const width = document.getElementById('width');
+        const height = document.getElementById('height');
+
+        let mediaStream = null;
+        let peerConnection = null;
 
         const servers = {
             iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' }
+                { urls: 'stun:stun.l.google.com:19302' },
+                { 
+                    urls: 'turn:openrelay.metered.ca:80',
+                    username: 'openrelayproject',
+                    credential: 'openrelayproject'
+                }
             ]
         };
 
-        let peerConnection = null;
-
-        startStreamBtn.addEventListener('click', async () => {
+        async function startStream() {
             try {
-                // Получаем полный экран
-                const stream = await navigator.mediaDevices.getDisplayMedia({
+                const screenStream = await navigator.mediaDevices.getDisplayMedia({
                     video: { 
                         displaySurface: 'monitor',
                         cursor: 'always'
                     }
                 });
 
-                const track = stream.getVideoTracks()[0];
-                const imageCapture = new ImageCapture(track);
-
                 const canvas = document.createElement('canvas');
                 const ctx = canvas.getContext('2d');
+                const imageCapture = new ImageCapture(screenStream.getVideoTracks()[0]);
 
-                // Настройки обрезки
-                const x = parseInt(xInput.value);
-                const y = parseInt(yInput.value);
-                const width = parseInt(widthInput.value);
-                const height = parseInt(heightInput.value);
+                canvas.width = parseInt(width.value);
+                canvas.height = parseInt(height.value);
 
-                // Настройка canvas
-                canvas.width = width;
-                canvas.height = height;
-                previewCanvas.width = width;
-                previewCanvas.height = height;
-                const previewCtx = previewCanvas.getContext('2d');
-
-                // Функция стриминга
-                function streamFrame() {
+                function processFrame() {
                     imageCapture.grabFrame().then(bitmap => {
-                        // Обрезка
                         ctx.drawImage(
                             bitmap, 
-                            x, y, width, height,  // Источник
-                            0, 0, width, height   // Приемник
+                            parseInt(xCoord.value), 
+                            parseInt(yCoord.value), 
+                            canvas.width, 
+                            canvas.height,
+                            0, 0, 
+                            canvas.width, 
+                            canvas.height
                         );
-
-                        // Превью
-                        previewCtx.drawImage(
-                            bitmap, 
-                            x, y, width, height,  
-                            0, 0, width, height
-                        );
-
-                        requestAnimationFrame(streamFrame);
+                        requestAnimationFrame(processFrame);
                     });
                 }
 
-                streamFrame();
+                processFrame();
 
-                // WebRTC стриминг
                 const cropStream = canvas.captureStream(25);
                 peerConnection = new RTCPeerConnection(servers);
                 
@@ -116,7 +141,8 @@
                 const offer = await peerConnection.createOffer();
                 await peerConnection.setLocalDescription(offer);
                 
-                socket.emit('screen-offer', peerConnection.localDescription);
+                socket.emit('stream-offer', offer);
+                socket.emit('register-streamer');
 
                 peerConnection.onicecandidate = (event) => {
                     if (event.candidate) {
@@ -124,18 +150,27 @@
                     }
                 };
 
+                startStreamBtn.disabled = true;
+                stopStreamBtn.disabled = false;
+
             } catch (error) {
                 console.error('Streaming error:', error);
             }
+        }
+
+        startStreamBtn.addEventListener('click', startStream);
+
+        stopStreamBtn.addEventListener('click', () => {
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+            startStreamBtn.disabled = false;
+            stopStreamBtn.disabled = true;
         });
 
-        // Обработка WebRTC
-        socket.on('viewer-screen-answer', async (answer) => {
+        socket.on('viewer-answer', async (answer) => {
             await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
-        });
-
-        socket.on('ice-candidate', async (candidate) => {
-            await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
         });
     </script>
 </body>
