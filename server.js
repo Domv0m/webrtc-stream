@@ -1,56 +1,77 @@
-const express = require('express');
-const http = require('http');
-const socketIo = require('socket.io');
+const net = require('net');
+const WebSocket = require('ws');
 
-const app = express();
-const server = http.createServer(app);
-const io = socketIo(server, {
-    cors: { origin: "*" }
-});
+class MinecraftProxy {
+    constructor(port = 19132) {
+        this.port = port;
+        this.tunnels = new Map();
+        this.server = net.createServer();
+    }
 
-app.use(express.static('public'));
-
-let streamer = null;
-const viewers = new Set();
-
-io.on('connection', (socket) => {
-    console.log(`New connection: ${socket.id}`);
-
-    socket.on('register-streamer', () => {
-        streamer = socket;
-        console.log('Streamer registered');
-    });
-
-    socket.on('register-viewer', () => {
-        viewers.add(socket);
-        console.log('Viewer registered');
-    });
-
-    socket.on('stream-offer', (offer) => {
-        viewers.forEach(viewer => {
-            viewer.emit('stream-offer', offer);
+    start() {
+        this.server.listen(this.port, '0.0.0.0', () => {
+            console.log(`Minecraft Proxy Server started on port ${this.port}`);
         });
-    });
 
-    socket.on('viewer-answer', (answer) => {
-        if (streamer) {
-            streamer.emit('viewer-answer', answer);
+        this.server.on('connection', (clientSocket) => {
+            console.log('New Minecraft connection');
+            this.handleMinecraftConnection(clientSocket);
+        });
+    }
+
+    handleMinecraftConnection(clientSocket) {
+        const tunnel = Array.from(this.tunnels.values())[0];
+        
+        if (tunnel) {
+            // Отправка информации о новом подключении
+            tunnel.send(JSON.stringify({
+                type: 'minecraft-connection',
+                clientInfo: {
+                    address: clientSocket.remoteAddress,
+                    port: clientSocket.remotePort
+                }
+            }));
+
+            // Временная приостановка клиентского сокета
+            clientSocket.pause();
+
+            // Создание обработчиков данных
+            const dataHandler = (message) => {
+                const data = JSON.parse(message);
+                
+                if (data.type === 'tunnel-ready') {
+                    // Возобновление и пересылка данных
+                    clientSocket.resume();
+                    
+                    clientSocket.on('data', (chunk) => {
+                        tunnel.send(JSON.stringify({
+                            type: 'minecraft-data',
+                            data: chunk.toString('base64')
+                        }));
+                    });
+
+                    tunnel.on('message', (message) => {
+                        const data = JSON.parse(message);
+                        if (data.type === 'minecraft-response') {
+                            clientSocket.write(Buffer.from(data.data, 'base64'));
+                        }
+                    });
+                }
+            };
+
+            tunnel.on('message', dataHandler);
+        } else {
+            console.log('No active tunnel');
+            clientSocket.destroy();
         }
-    });
+    }
 
-    socket.on('ice-candidate', (candidate) => {
-        socket.broadcast.emit('ice-candidate', candidate);
-    });
+    registerTunnel(tunnel) {
+        const tunnelId = Date.now().toString();
+        this.tunnels.set(tunnelId, tunnel);
+        return tunnelId;
+    }
+}
 
-    socket.on('disconnect', () => {
-        viewers.delete(socket);
-        if (socket === streamer) {
-            streamer = null;
-        }
-    });
-});
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-});
+const proxy = new MinecraftProxy();
+proxy.start();
