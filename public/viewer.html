@@ -9,21 +9,33 @@
             height: 100%;
             background-color: black;
             overflow: hidden;
+            font-family: Arial, sans-serif;
+            color: white;
         }
         #remoteVideo {
             width: 100%;
             height: 100%;
             object-fit: cover;
         }
+        #debugInfo {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background-color: rgba(0,0,0,0.7);
+            padding: 10px;
+            z-index: 1000;
+        }
     </style>
 </head>
 <body>
     <video id="remoteVideo" autoplay playsinline></video>
+    <div id="debugInfo">Initializing...</div>
 
     <script src="/socket.io/socket.io.js"></script>
     <script>
         const socket = io();
         const remoteVideo = document.getElementById('remoteVideo');
+        const debugInfo = document.getElementById('debugInfo');
 
         const servers = {
             iceServers: [
@@ -38,14 +50,83 @@
 
         let peerConnection = null;
 
+        function updateDebug(message) {
+            console.log(message);
+            debugInfo.textContent = message;
+        }
+
         function createPeerConnection() {
+            updateDebug('Creating Peer Connection...');
+            
             peerConnection = new RTCPeerConnection(servers);
 
             peerConnection.ontrack = (event) => {
-                console.log('Track received');
+                updateDebug('Track received');
                 remoteVideo.srcObject = event.streams[0];
+                remoteVideo.play().catch(error => {
+                    updateDebug(`Video play error: ${error.message}`);
+                });
             };
 
             peerConnection.onicecandidate = (event) => {
                 if (event.candidate) {
-                    socket.emit('ice-candidate',
+                    updateDebug('Sending ICE candidate');
+                    socket.emit('ice-candidate', event.candidate);
+                }
+            };
+
+            peerConnection.onconnectionstatechange = () => {
+                updateDebug(`Connection state: ${peerConnection.connectionState}`);
+            };
+
+            peerConnection.oniceconnectionstatechange = () => {
+                updateDebug(`ICE connection state: ${peerConnection.iceConnectionState}`);
+            };
+        }
+
+        socket.on('connect', () => {
+            updateDebug('Socket Connected. Requesting Stream...');
+            socket.emit('register-viewer');
+        });
+
+        socket.on('screen-offer', async (offer) => {
+            try {
+                updateDebug('Received screen offer');
+                
+                if (!peerConnection) {
+                    createPeerConnection();
+                }
+
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+                updateDebug('Remote description set');
+
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+                
+                updateDebug('Sending viewer answer');
+                socket.emit('viewer-screen-answer', answer);
+            } catch (error) {
+                updateDebug(`Offer processing error: ${error.message}`);
+                console.error(error);
+            }
+        });
+
+        socket.on('ice-candidate', async (candidate) => {
+            try {
+                if (peerConnection) {
+                    updateDebug('Adding ICE candidate');
+                    await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                }
+            } catch (error) {
+                updateDebug(`ICE candidate error: ${error.message}`);
+                console.error(error);
+            }
+        });
+
+        // Дополнительная диагностика
+        remoteVideo.addEventListener('error', (e) => {
+            updateDebug(`Video error: ${e.message}`);
+        });
+    </script>
+</body>
+</html>
