@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>WebRTC Streamer</title>
+    <title>WebRTC Screen Sharing Streamer</title>
     <style>
         body { 
             display: flex; 
@@ -10,26 +10,41 @@
             padding: 20px; 
             background-color: #f0f0f0; 
         }
-        video { 
+        video, #screenShare { 
             max-width: 80%; 
             background-color: black; 
             margin-bottom: 20px; 
         }
-        #status {
-            margin-bottom: 10px;
-            font-weight: bold;
+        button {
+            margin: 10px;
+            padding: 10px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
         }
     </style>
 </head>
 <body>
     <div id="status">Initializing...</div>
+    
+    <div>
+        <button id="startCamera">Start Camera</button>
+        <button id="shareScreen">Share Screen</button>
+    </div>
+
     <video id="localVideo" autoplay playsinline muted></video>
+    <video id="screenShare" autoplay playsinline muted></video>
 
     <script src="/socket.io/socket.io.js"></script>
     <script>
         const socket = io();
         const localVideo = document.getElementById('localVideo');
+        const screenShareVideo = document.getElementById('screenShare');
         const statusEl = document.getElementById('status');
+        const startCameraBtn = document.getElementById('startCamera');
+        const shareScreenBtn = document.getElementById('shareScreen');
 
         const servers = {
             iceServers: [
@@ -43,63 +58,71 @@
         };
 
         let localStream = null;
+        let screenStream = null;
         let peerConnections = [];
 
-        async function startStream() {
+        async function startCamera() {
             try {
                 localStream = await navigator.mediaDevices.getUserMedia({ 
                     video: true, 
                     audio: true 
                 });
                 localVideo.srcObject = localStream;
-                statusEl.textContent = 'Stream started. Waiting for viewers...';
-                
+                statusEl.textContent = 'Camera started';
                 socket.emit('streamer-ready');
             } catch (error) {
-                statusEl.textContent = 'Error accessing media devices';
+                statusEl.textContent = 'Error accessing camera';
                 console.error(error);
             }
         }
 
-        socket.on('viewer-request', async () => {
-            if (!localStream) {
-                await startStream();
+        async function shareScreen() {
+            try {
+                screenStream = await navigator.mediaDevices.getDisplayMedia({ 
+                    video: true,
+                    audio: false 
+                });
+                screenShareVideo.srcObject = screenStream;
+                statusEl.textContent = 'Screen sharing started';
+                
+                // Создаем новое WebRTC соединение для экрана
+                const peerConnection = new RTCPeerConnection(servers);
+                
+                screenStream.getTracks().forEach(track => {
+                    peerConnection.addTrack(track, screenStream);
+                });
+
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+                
+                socket.emit('screen-offer', offer);
+
+                peerConnection.onicecandidate = (event) => {
+                    if (event.candidate) {
+                        socket.emit('ice-candidate', event.candidate);
+                    }
+                };
+
+                peerConnections.push(peerConnection);
+
+            } catch (error) {
+                statusEl.textContent = 'Screen sharing error';
+                console.error(error);
             }
+        }
 
-            const peerConnection = new RTCPeerConnection(servers);
-            
-            localStream.getTracks().forEach(track => {
-                peerConnection.addTrack(track, localStream);
-            });
-
-            const offer = await peerConnection.createOffer();
-            await peerConnection.setLocalDescription(offer);
-            
-            socket.emit('streamer-offer', offer);
-            statusEl.textContent = 'Offer sent to viewer';
-
-            peerConnection.onicecandidate = (event) => {
-                if (event.candidate) {
-                    socket.emit('ice-candidate', event.candidate);
-                }
-            };
-
-            peerConnections.push(peerConnection);
-        });
-
-        socket.on('viewer-answer', async (answer) => {
+        // Обработка ответа от зрителей
+        socket.on('viewer-screen-answer', async (answer) => {
             const peerConnection = peerConnections[peerConnections.length - 1];
             await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
-            statusEl.textContent = 'Connection established';
+            statusEl.textContent = 'Screen sharing connection established';
         });
 
-        socket.on('ice-candidate', async (candidate) => {
-            const peerConnection = peerConnections[peerConnections.length - 1];
-            await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-        });
+        startCameraBtn.addEventListener('click', startCamera);
+        shareScreenBtn.addEventListener('click', shareScreen);
 
-        // Автозапуск
-        startStream();
+        // Автоподключение камеры
+        startCamera();
     </script>
 </body>
 </html>
