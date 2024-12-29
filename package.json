@@ -1,6 +1,6 @@
 {
   "name": "webrtc-stream",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "WebRTC Streaming Platform",
   "main": "server.js",
   "engines": {
