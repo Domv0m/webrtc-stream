@@ -1,208 +1,135 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Selective Screen Share</title>
+    <title>Screen Crop Streamer</title>
     <style>
         body {
-            font-family: Arial, sans-serif;
             display: flex;
             flex-direction: column;
             align-items: center;
-            padding: 20px;
-            background-color: #f0f0f0;
+            font-family: Arial;
+            background-color: #f4f4f4;
         }
-        .controls {
+        #cropControls {
             display: flex;
             gap: 10px;
-            margin-bottom: 20px;
+            margin: 10px;
+        }
+        #cropControls input {
+            width: 70px;
         }
         #previewCanvas {
+            border: 2px solid blue;
             max-width: 500px;
-            border: 2px solid #333;
-            background-color: white;
-        }
-        .selection-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.5);
-            z-index: 1000;
-            display: none;
-        }
-        #selectionRect {
-            position: absolute;
-            border: 2px solid red;
-            background: rgba(255, 0, 0, 0.1);
         }
     </style>
 </head>
 <body>
-    <div class="controls">
-        <button id="selectArea">Select Screen Area</button>
-        <button id="startStream">Start Streaming</button>
+    <div id="cropControls">
+        <label>X: <input type="number" id="xInput" value="0"></label>
+        <label>Y: <input type="number" id="yInput" value="0"></label>
+        <label>Width: <input type="number" id="widthInput" value="500"></label>
+        <label>Height: <input type="number" id="heightInput" value="500"></label>
+        <button id="startStream">Start Stream</button>
     </div>
 
     <canvas id="previewCanvas"></canvas>
 
-    <div class="selection-overlay" id="selectionOverlay">
-        <div id="selectionRect"></div>
-    </div>
-
     <script src="/socket.io/socket.io.js"></script>
     <script>
         const socket = io();
-        const selectAreaBtn = document.getElementById('selectArea');
+        const xInput = document.getElementById('xInput');
+        const yInput = document.getElementById('yInput');
+        const widthInput = document.getElementById('widthInput');
+        const heightInput = document.getElementById('heightInput');
         const startStreamBtn = document.getElementById('startStream');
         const previewCanvas = document.getElementById('previewCanvas');
-        const selectionOverlay = document.getElementById('selectionOverlay');
-        const selectionRect = document.getElementById('selectionRect');
-
-        let selectedArea = null;
-        let mediaStream = null;
-        let peerConnection = null;
 
         const servers = {
             iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' },
-                { 
-                    urls: 'turn:openrelay.metered.ca:80',
-                    username: 'openrelayproject',
-                    credential: 'openrelayproject'
-                }
+                { urls: 'stun:stun.l.google.com:19302' }
             ]
         };
 
-        // Выбор области экрана
-        selectAreaBtn.addEventListener('click', async () => {
+        let peerConnection = null;
+
+        startStreamBtn.addEventListener('click', async () => {
             try {
+                // Получаем полный экран
                 const stream = await navigator.mediaDevices.getDisplayMedia({
                     video: { 
-                        displaySurface: 'browser',
+                        displaySurface: 'monitor',
                         cursor: 'always'
                     }
                 });
 
                 const track = stream.getVideoTracks()[0];
                 const imageCapture = new ImageCapture(track);
-                const bitmap = await imageCapture.grabFrame();
 
-                // Отрисовка превью
-                previewCanvas.width = bitmap.width;
-                previewCanvas.height = bitmap.height;
-                const ctx = previewCanvas.getContext('2d');
-                ctx.drawImage(bitmap, 0, 0);
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
 
-                // Включаем оверлей для выбора области
-                selectionOverlay.style.display = 'block';
+                // Настройки обрезки
+                const x = parseInt(xInput.value);
+                const y = parseInt(yInput.value);
+                const width = parseInt(widthInput.value);
+                const height = parseInt(heightInput.value);
+
+                // Настройка canvas
+                canvas.width = width;
+                canvas.height = height;
+                previewCanvas.width = width;
+                previewCanvas.height = height;
+                const previewCtx = previewCanvas.getContext('2d');
+
+                // Функция стриминга
+                function streamFrame() {
+                    imageCapture.grabFrame().then(bitmap => {
+                        // Обрезка
+                        ctx.drawImage(
+                            bitmap, 
+                            x, y, width, height,  // Источник
+                            0, 0, width, height   // Приемник
+                        );
+
+                        // Превью
+                        previewCtx.drawImage(
+                            bitmap, 
+                            x, y, width, height,  
+                            0, 0, width, height
+                        );
+
+                        requestAnimationFrame(streamFrame);
+                    });
+                }
+
+                streamFrame();
+
+                // WebRTC стриминг
+                const cropStream = canvas.captureStream(25);
+                peerConnection = new RTCPeerConnection(servers);
                 
-                let startX, startY;
-                let isSelecting = false;
-
-                selectionOverlay.addEventListener('mousedown', (e) => {
-                    isSelecting = true;
-                    startX = e.clientX;
-                    startY = e.clientY;
-                    
-                    selectionRect.style.left = `${startX}px`;
-                    selectionRect.style.top = `${startY}px`;
-                    selectionRect.style.width = '0px';
-                    selectionRect.style.height = '0px';
+                cropStream.getTracks().forEach(track => {
+                    peerConnection.addTrack(track, cropStream);
                 });
 
-                selectionOverlay.addEventListener('mousemove', (e) => {
-                    if (!isSelecting) return;
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+                
+                socket.emit('screen-offer', peerConnection.localDescription);
 
-                    const width = Math.abs(e.clientX - startX);
-                    const height = Math.abs(e.clientY - startY);
-                    
-                    selectionRect.style.width = `${width}px`;
-                    selectionRect.style.height = `${height}px`;
-                    
-                    selectionRect.style.left = e.clientX > startX 
-                        ? `${startX}px` 
-                        : `${e.clientX}px`;
-                    
-                    selectionRect.style.top = e.clientY > startY 
-                        ? `${startY}px` 
-                        : `${e.clientY}px`;
-                });
-
-                selectionOverlay.addEventListener('mouseup', (e) => {
-                    isSelecting = false;
-                    selectionOverlay.style.display = 'none';
-
-                    // Сохраняем координаты выделенной области
-                    selectedArea = {
-                        x: parseInt(selectionRect.style.left),
-                        y: parseInt(selectionRect.style.top),
-                        width: parseInt(selectionRect.style.width),
-                        height: parseInt(selectionRect.style.height)
-                    };
-
-                    mediaStream = stream;
-                });
+                peerConnection.onicecandidate = (event) => {
+                    if (event.candidate) {
+                        socket.emit('ice-candidate', event.candidate);
+                    }
+                };
 
             } catch (error) {
-                console.error('Screen selection error:', error);
+                console.error('Streaming error:', error);
             }
         });
 
-        // Старт стриминга
-        startStreamBtn.addEventListener('click', async () => {
-            if (!mediaStream) {
-                alert('Сначала выберите область экрана');
-                return;
-            }
-
-            // Создаем canvas для стриминга выбранной области
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d');
-            
-            const track = mediaStream.getVideoTracks()[0];
-            const imageCapture = new ImageCapture(track);
-
-            canvas.width = selectedArea.width;
-            canvas.height = selectedArea.height;
-
-            // Периодическое обновление кадра
-            function streamFrame() {
-                imageCapture.grabFrame().then(bitmap => {
-                    ctx.drawImage(
-                        bitmap, 
-                        selectedArea.x, selectedArea.y, 
-                        selectedArea.width, selectedArea.height,
-                        0, 0, 
-                        selectedArea.width, selectedArea.height
-                    );
-                    requestAnimationFrame(streamFrame);
-                });
-            }
-
-            streamFrame();
-
-            // WebRTC стриминг
-            const stream = canvas.captureStream(25);
-            peerConnection = new RTCPeerConnection(servers);
-            
-            stream.getTracks().forEach(track => {
-                peerConnection.addTrack(track, stream);
-            });
-
-            const offer = await peerConnection.createOffer();
-            await peerConnection.setLocalDescription(offer);
-            
-            socket.emit('screen-offer', peerConnection.localDescription);
-
-            peerConnection.onicecandidate = (event) => {
-                if (event.candidate) {
-                    socket.emit('ice-candidate', event.candidate);
-                }
-            };
-        });
-
-        // Обработка ответа от зрителей
+        // Обработка WebRTC
         socket.on('viewer-screen-answer', async (answer) => {
             await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
         });
