@@ -14,14 +14,15 @@
             height: 100vh;
         }
         .stream-container {
+            display: flex;
+            gap: 15px;
             flex-grow: 1;
-            position: relative;
         }
-        #localVideo {
-            width: 100%;
-            height: 100%;
+        #localVideo, #previewCanvas {
+            flex: 1;
             background-color: black;
             border-radius: 10px;
+            max-height: 70vh;
         }
         .controls {
             display: flex;
@@ -33,11 +34,6 @@
             border: none;
             border-radius: 5px;
             cursor: pointer;
-            transition: opacity 0.3s;
-        }
-        .btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
         }
         #streamControls {
             display: grid;
@@ -65,17 +61,19 @@
 
     <div class="stream-container">
         <video id="localVideo" autoplay playsinline muted></video>
+        <canvas id="previewCanvas"></canvas>
     </div>
 
     <div class="controls">
-        <button id="startStream" class="btn btn-primary">Start Stream</button>
-        <button id="stopStream" class="btn btn-danger" disabled>Stop Stream</button>
+        <button id="startStream" class="btn">Start Stream</button>
+        <button id="stopStream" class="btn">Stop Stream</button>
     </div>
 
     <script src="/socket.io/socket.io.js"></script>
     <script>
         const socket = io();
         const localVideo = document.getElementById('localVideo');
+        const previewCanvas = document.getElementById('previewCanvas');
         const startStreamBtn = document.getElementById('startStream');
         const stopStreamBtn = document.getElementById('stopStream');
         const xCoord = document.getElementById('xCoord');
@@ -83,8 +81,9 @@
         const width = document.getElementById('width');
         const height = document.getElementById('height');
 
-        let mediaStream = null;
+        let screenStream = null;
         let peerConnection = null;
+        let animationFrameId = null;
 
         const servers = {
             iceServers: [
@@ -99,19 +98,21 @@
 
         async function startStream() {
             try {
-                const screenStream = await navigator.mediaDevices.getDisplayMedia({
+                screenStream = await navigator.mediaDevices.getDisplayMedia({
                     video: { 
                         displaySurface: 'monitor',
                         cursor: 'always'
                     }
                 });
 
-                const canvas = document.createElement('canvas');
-                const ctx = canvas.getContext('2d');
-                const imageCapture = new ImageCapture(screenStream.getVideoTracks()[0]);
+                localVideo.srcObject = screenStream;
 
-                canvas.width = parseInt(width.value);
-                canvas.height = parseInt(height.value);
+                const track = screenStream.getVideoTracks()[0];
+                const imageCapture = new ImageCapture(track);
+
+                previewCanvas.width = parseInt(width.value);
+                previewCanvas.height = parseInt(height.value);
+                const ctx = previewCanvas.getContext('2d');
 
                 function processFrame() {
                     imageCapture.grabFrame().then(bitmap => {
@@ -119,19 +120,22 @@
                             bitmap, 
                             parseInt(xCoord.value), 
                             parseInt(yCoord.value), 
-                            canvas.width, 
-                            canvas.height,
+                            previewCanvas.width, 
+                            previewCanvas.height,
                             0, 0, 
-                            canvas.width, 
-                            canvas.height
+                            previewCanvas.width, 
+                            previewCanvas.height
                         );
-                        requestAnimationFrame(processFrame);
+                        
+                        animationFrameId = requestAnimationFrame(processFrame);
+                    }).catch(error => {
+                        console.error('Frame capture error:', error);
                     });
                 }
 
                 processFrame();
 
-                const cropStream = canvas.captureStream(25);
+                const cropStream = previewCanvas.captureStream(25);
                 peerConnection = new RTCPeerConnection(servers);
                 
                 cropStream.getTracks().forEach(track => {
@@ -141,8 +145,7 @@
                 const offer = await peerConnection.createOffer();
                 await peerConnection.setLocalDescription(offer);
                 
-                socket.emit('stream-offer', offer);
-                socket.emit('register-streamer');
+                socket.emit('screen-offer', offer);
 
                 peerConnection.onicecandidate = (event) => {
                     if (event.candidate) {
@@ -150,27 +153,44 @@
                     }
                 };
 
-                startStreamBtn.disabled = true;
-                stopStreamBtn.disabled = false;
-
             } catch (error) {
                 console.error('Streaming error:', error);
             }
         }
 
-        startStreamBtn.addEventListener('click', startStream);
+        function stopStream() {
+            if (animationFrameId) {
+                cancelAnimationFrame(animationFrameId);
+            }
 
-        stopStreamBtn.addEventListener('click', () => {
+            if (screenStream) {
+                screenStream.getTracks().forEach(track => track.stop());
+            }
+
             if (peerConnection) {
                 peerConnection.close();
                 peerConnection = null;
             }
-            startStreamBtn.disabled = false;
-            stopStreamBtn.disabled = true;
+
+            localVideo.srcObject = null;
+            const ctx = previewCanvas.getContext('2d');
+            ctx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+        }
+
+        startStreamBtn.addEventListener('click', startStream);
+        stopStreamBtn.addEventListener('click', stopStream);
+
+        socket.on('viewer-screen-answer', async (answer) => {
+            try {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+                console.log('Remote description set');
+            } catch (error) {
+                console.error('Error setting remote description:', error);
+            }
         });
 
-        socket.on('viewer-answer', async (answer) => {
-            await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+        socket.on('connect', () => {
+            console.log('Socket connected');
         });
     </script>
 </body>
