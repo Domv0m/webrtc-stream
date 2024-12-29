@@ -1,11 +1,16 @@
 {
   "name": "webrtc-stream",
   "version": "1.0.0",
-  "dependencies": {
-    "express": "^4.17.1",
-    "socket.io": "^4.4.1"
+  "description": "WebRTC Streaming Platform",
+  "main": "server.js",
+  "engines": {
+    "node": ">=14.0.0"
   },
   "scripts": {
     "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.17.1",
+    "socket.io": "^4.4.1"
   }
 }
