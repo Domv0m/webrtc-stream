@@ -1,59 +1,31 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>WebRTC Viewer</title>
+    <title>QR Code Viewer</title>
     <style>
-        body { 
-            display: flex; 
-            flex-direction: column; 
-            align-items: center; 
-            padding: 20px; 
-            background-color: #f0f0f0; 
+        body {
             margin: 0;
-            overflow: hidden;
-        }
-        .video-container {
-            position: relative;
-            width: 100vw;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
             height: 100vh;
             background-color: black;
         }
-        #screenVideo {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            width: 50%; 
-            height: 50%; 
+        #qrVideo {
+            max-width: 100%;
+            max-height: 100%;
             object-fit: contain;
-            background-color: rgba(0,0,0,0.5);
-            border: 2px solid white;
-        }
-        #status {
-            position: absolute;
-            top: 10px;
-            left: 50%;
-            transform: translateX(-50%);
-            color: white;
-            background-color: rgba(0,0,0,0.5);
-            padding: 5px 10px;
-            border-radius: 5px;
-            z-index: 10;
         }
     </style>
 </head>
 <body>
-    <div id="status">Connecting to stream...</div>
-
-    <div class="video-container">
-        <video id="screenVideo" autoplay playsinline></video>
-    </div>
+    <video id="qrVideo" autoplay playsinline></video>
 
     <script src="/socket.io/socket.io.js"></script>
     <script>
         const socket = io();
-        const screenVideo = document.getElementById('screenVideo');
-        const statusEl = document.getElementById('status');
+        const qrVideo = document.getElementById('qrVideo');
 
         const servers = {
             iceServers: [
@@ -72,8 +44,7 @@
             peerConnection = new RTCPeerConnection(servers);
 
             peerConnection.ontrack = (event) => {
-                screenVideo.srcObject = event.streams[0];
-                statusEl.textContent = 'Stream connected';
+                qrVideo.srcObject = event.streams[0];
             };
 
             peerConnection.onicecandidate = (event) => {
@@ -81,16 +52,7 @@
                     socket.emit('ice-candidate', event.candidate);
                 }
             };
-
-            peerConnection.onconnectionstatechange = () => {
-                statusEl.textContent = `Connection state: ${peerConnection.connectionState}`;
-            };
         }
-
-        socket.on('connect', () => {
-            socket.emit('viewer-request');
-            statusEl.textContent = 'Requesting stream...';
-        });
 
         socket.on('screen-offer', async (offer) => {
             createPeerConnection();
@@ -101,10 +63,8 @@
                 await peerConnection.setLocalDescription(answer);
                 
                 socket.emit('viewer-screen-answer', answer);
-                statusEl.textContent = 'Sending answer...';
             } catch (error) {
-                statusEl.textContent = 'Error processing offer';
-                console.error(error);
+                console.error('Error processing offer:', error);
             }
         });
 
